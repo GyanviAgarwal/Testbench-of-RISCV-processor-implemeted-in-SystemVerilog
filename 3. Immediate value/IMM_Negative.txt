@@ -1,0 +1,308 @@
+module RISCV(
+input clk1, clk2, // Two clocks are used to implement 5 stage pipeline.
+  
+  //input [31:0] data
+  input reg signed [31:0] Mem, //1024X32 memory_instruction
+  output reg signed [31:0] Reg1
+);
+
+reg signed [31:0] Reg [0:31]; //32X32 Regiter Bank
+//reg signed [31:0] Mem [0:1023]; //1024X32 memory_instruction
+
+reg signed [31:0] PC, IF_ID_IR, IF_ID_NPC; //Registers are used in FETCH-DECODE statge
+reg signed [31:0] ID_EX_IR, ID_EX_NPC, ID_EX_A,ID_EX_B;//Registers are used in DECODE-EXECUTION statge
+reg signed [31:0] ID_EX_Imm_A,ID_EX_Imm_S, ID_EX_Imm_L, ID_EX_Imm_B; // FOR SIGN EXTENSION
+reg [4:0] ID_EX_type, EX_MEM_type, MEM_WB_type; //REGISTERS TO HOLD TYPE OF INSTRUCTIONS
+reg signed [31:0] EX_MEM_IR, EX_MEM_ALUout, EX_MEM_B, EX_FWD, EX_MEM_NPC; //Registers are used in EXECUTE-MEMORY statge
+reg EX_MEM_cond; //Flag used for branch
+reg signed [31:0] MEM_WB_IR, MEM_WB_ALUout, MEM_WB_ALUout_ex, MEM_WB_LMD; //Registers are used in MEMORY-WRITE BACK statge
+
+reg signed [31:0] Mem_data [0:1023]; //1024X32 memory_data
+parameter BEQ=5'b11000,   //all these bits have different 6-2 bits
+          LW = 5'b00000,
+          SW = 5'b01000,
+          MAC = 5'b11111,  //incorporating MAC instructions
+          ADDI = 5'b00100,
+          HLT = 5'b11110,
+          NOP = 5'b01111; //no operation for stalling
+             
+parameter RR_ALU=5'b01100, //Defined all instructions types on the basis of 6-2 bits
+          RM_ALU=5'b00100,
+          LOAD=5'b00000,
+          STORE=5'b01000,
+          BRANCH=5'b11000,
+          HALT=5'b11110, //Chosen this to avoid error
+          MAC_M=5'b11111;
+
+parameter ADD1 = 3'b000, //PARAMETERS ARE USED FOR REGISTER-REGISTER OPERATIONS
+          AND1 = 3'b111,
+          OR1 = 3'b110,
+          SLL1 = 3'b001,
+          SRA1 = 3'b101;
+         
+
+reg HALTED; // Flag used to stop the program
+reg TAKEN_BRANCH; // Flag used to branch taken
+reg write_back; // Flag used to write back
+  
+  initial
+    begin
+      for(int i=0; i<32; i=i+1)
+        begin
+          $display("Register Bank inside %d,%b", i, Reg[i],$time);
+         
+        end
+    end
+ 
+    initial
+    begin
+      for(int i=0; i<1024; i=i+1)
+        begin
+          $display("Data Memory inside %d,%b", i, Mem_data[i],$time);
+         
+        end
+    end
+
+//FETCH STAGE
+  always @ (posedge clk1) //Computation started at positive edge of clk1
+    begin
+    if (HALTED==0)
+    begin   
+        if ((EX_MEM_IR[6:2]==BEQ)&&(EX_MEM_cond==1'b1)&&(TAKEN_BRANCH==1'b1)) //checking for branch instructions
+            begin
+                IF_ID_IR <= #2 Mem[EX_MEM_ALUout];
+                TAKEN_BRANCH <= #2 1'b0;
+                EX_MEM_cond <=#2 1'b0;
+                IF_ID_NPC<= #2 EX_MEM_ALUout;
+                PC <= #2 EX_MEM_ALUout - 1;
+            end
+       
+           
+        else
+            begin  //for normal fetch operations
+              IF_ID_IR <= #2 Mem[PC];
+              IF_ID_IR <= #2 Mem;
+              IF_ID_NPC <= #2 PC+1;
+              PC <= #2 PC+1;
+              $display("IF_ID_IR Value %b", IF_ID_IR);
+            end
+            
+       if(EX_MEM_IR[6:2]==LOAD) //Used for stalling the pc value
+       begin
+            PC <= #2 EX_MEM_NPC;
+       end
+end     
+    end
+        
+// DECODE STAGE
+always @ (posedge clk2)
+    if (HALTED==0)
+        begin  
+            if((EX_MEM_IR[11:7] == IF_ID_IR[19:15])) //checking whether rd is equal to rs1 (RAW hazard)       
+             begin
+                if ((EX_MEM_IR[6:2] != LOAD)) //bypassing for instructions except load
+                    begin
+                        ID_EX_A <= #2 EX_MEM_ALUout; //reading value of ALU
+                    end
+             end
+                else
+                  begin
+                        
+                        if (IF_ID_IR[19:15] == 5'b00000) //Incorporating rs1
+                            begin
+                                ID_EX_A <= 0;
+                            end
+                        
+                    else 
+                        begin
+                            ID_EX_A <= #2 Reg[IF_ID_IR[19:15]];
+                          $display("Operand A value ID_EX_A %d",ID_EX_A,$time);
+                        end
+                  end
+                if((EX_MEM_IR[11:7] == IF_ID_IR[24:20])) //similarly for rd and rs2       
+             begin
+                if ((EX_MEM_IR[6:2] != LOAD))
+                    begin
+                        ID_EX_B <= #2 EX_MEM_ALUout;
+                    end
+             end
+                                        
+                else
+                    begin                
+                        if (IF_ID_IR[24:20] ==5'b00000)  //Incorporating rs2 
+                            begin
+                                ID_EX_B <= 0;
+                            end
+                        else 
+                            begin
+                              ID_EX_B <= #2 Reg[IF_ID_IR[24:20]]; 
+                            end
+                  end
+     
+            ID_EX_NPC <= #2 IF_ID_NPC;
+            ID_EX_IR <= #2 IF_ID_IR;
+            case (IF_ID_IR[6:2])
+                ADDI : begin
+                             ID_EX_Imm_A <= #2 {{20{IF_ID_IR[31]}},{IF_ID_IR[31:20]}};     // immediate value of ADDI 
+                       end
+                LW : begin
+                  ID_EX_Imm_L <= #2 {{20{IF_ID_IR[31]}},{IF_ID_IR[31:22]}};   //immediate value of LOAD
+                  $display("Load Immediate value dut %d",ID_EX_Imm_L);
+                     end
+                SW : begin
+                  ID_EX_Imm_L <= #2 {{20{IF_ID_IR[31]}},{IF_ID_IR[31:28]},{IF_ID_IR[11:7]}};  //immediate value of store
+                     end
+                BEQ : begin
+                        ID_EX_Imm_B <= #2 {{20{IF_ID_IR[31]}},{IF_ID_IR[31]},{IF_ID_IR[7]},{IF_ID_IR[30:25]},{IF_ID_IR[11:8]}};  // immediate value for branch
+                     end
+            endcase
+            
+
+        
+        
+          $display("Type of Instruction %b", IF_ID_IR[6:2]); 
+          $display("Instruction Type %b",ID_EX_type);
+    case(IF_ID_IR[6:2]) //for computing type of instructions.
+        RR_ALU:      begin
+                            ID_EX_type <= #2 RR_ALU;                           
+                     end
+        ADDI:                begin
+                                   ID_EX_type <= #2 RM_ALU;
+                             end
+        LW:                     ID_EX_type <= #2 LOAD;
+        SW:                     ID_EX_type <= #2 STORE;
+        BEQ:                    ID_EX_type <= #2 BRANCH;
+        MAC:                    ID_EX_type <= #2 MAC_M; //included MAC instruction
+        NOP:                    ID_EX_type <= #2 NOP;
+        HLT:                    ID_EX_type <= #2 HALT;
+        default:                ID_EX_type <= #2 HALT;
+        
+     endcase
+    end
+       
+//EXECUTE STAGE 
+always @(posedge clk1)
+    if (HALTED==0)
+    begin
+        EX_MEM_NPC <= #2 ID_EX_NPC;      
+        EX_MEM_type  <= #2 ID_EX_type;
+        EX_MEM_IR    <= #2 ID_EX_IR;
+        TAKEN_BRANCH <= #2 0;
+    
+        case (ID_EX_type) //fOR CCOMPUING OPERATIONS
+        RR_ALU : begin  //ARITHEMATIC OPERATIONS
+                                       case(ID_EX_IR[14:12])
+                                         ADD1:   begin
+                                                    if(ID_EX_IR[31:27]==5'b00000)
+                                                       begin
+                                                        EX_MEM_ALUout <= #2 ID_EX_A + ID_EX_B;                                                    
+                                                       end
+                                                    else if(ID_EX_IR[31:27]==5'b01000)
+                                                        EX_MEM_ALUout <= #2 ID_EX_A - ID_EX_B; 
+                                                 end
+                                         AND1:    EX_MEM_ALUout <= #2 ID_EX_A & ID_EX_B;
+                                         OR1:     EX_MEM_ALUout <= #2 ID_EX_A | ID_EX_B;
+                                         SLL1:    EX_MEM_ALUout <= #2 ID_EX_A << ID_EX_B;
+                                         SRA1:    EX_MEM_ALUout <= #2 ID_EX_A >>> ID_EX_B;
+                                         default: EX_MEM_ALUout <= #2 32'hxxxxxxxx;
+                                       endcase
+                                   end
+        RM_ALU : begin //IMMEDIATE OPERATIONS
+                    case (ID_EX_IR[6:2])
+                        ADDI:   
+                             begin
+                              EX_MEM_ALUout <= #2 ID_EX_A + ID_EX_Imm_A;
+                             end  
+                        default: EX_MEM_ALUout <= #2 32'hxxxxxxxx;
+                    endcase
+                 end
+        MAC_M : begin  //MAC instruction
+                    case (ID_EX_IR[6:2])
+                        MAC:    EX_MEM_ALUout <= #2 (ID_EX_A * ID_EX_B) + Reg[ID_EX_IR[11:7]];  //IMPLEMENTATION OF MAC
+                        default: EX_MEM_ALUout <= #2 32'hxxxxxxxx;
+                    endcase
+               end
+        LOAD, STORE: //LOAD AND STORE INSTRUCTION
+                begin
+                    EX_MEM_ALUout <= #2 ID_EX_A + ID_EX_Imm_L;
+                    EX_MEM_B      <= #2 ID_EX_B;  
+                     //hazard <= #2 0;
+                    end
+        BRANCH: //BRANCH INSTRUCTION
+                begin
+                    EX_MEM_ALUout    <= #2 ID_EX_NPC + ID_EX_Imm_B;
+                    if (ID_EX_A == ID_EX_B)
+                        EX_MEM_cond      <= #2 1'b1;
+                    TAKEN_BRANCH <= #2 1'b1 ;
+                end     
+        NOP : //FOR STALLING
+                begin
+                        EX_MEM_ALUout <= #2 0;
+                end 
+    endcase 
+
+end
+
+
+// MEMORY STAGE
+always @ (posedge clk2)
+    if(HALTED==0)
+    begin
+        MEM_WB_type <= #2 EX_MEM_type; 
+        MEM_WB_IR   <= #2 EX_MEM_IR;
+         
+         
+     case (EX_MEM_type)
+        RR_ALU, RM_ALU, MAC_M,NOP:
+            begin
+                MEM_WB_ALUout   <= #2 EX_MEM_ALUout; 
+
+            end
+                
+        LOAD:   begin
+                    MEM_WB_LMD      <= #2 Mem_data[EX_MEM_ALUout];
+                end
+        STORE:  if(TAKEN_BRANCH ==0)
+                begin
+                    Mem_data[EX_MEM_ALUout] <= #2 EX_MEM_B; 
+                end
+     endcase
+end
+
+//WRITE-BACK STAGE
+
+always @(posedge clk1)
+ 
+    begin
+        if((TAKEN_BRANCH ==0) && (EX_MEM_cond==0)) //Disable write if branch taken
+        begin
+        write_back <= #2 1'b1;
+        case (MEM_WB_type)
+          RR_ALU: Reg[MEM_WB_IR[11:7]] <= #2 MEM_WB_ALUout;  //rd
+          RM_ALU: Reg[MEM_WB_IR[11:7]] <= #2 MEM_WB_ALUout; 
+          MAC_M:  Reg[MEM_WB_IR[11:7]] <= #2 MEM_WB_ALUout;  
+          LOAD:   Reg[MEM_WB_IR[11:7]] <= #2 MEM_WB_LMD;     
+          NOP:    Reg[MEM_WB_IR[11:7]] <= #2 MEM_WB_ALUout;    
+            HALT:   HALTED               <= #2 1'b1;
+        endcase
+          
+          $display("MEM_WB_LMD VALUE %b", MEM_WB_LMD);
+        end
+     
+end
+  always @(posedge clk2)
+        begin
+          Reg1<=ID_EX_Imm_L;
+        end
+ 
+endmodule
+
+
+ 
+////////////////INTERFACE//////////////////////////
+interface RISCV_intf();
+  logic signed [31:0] Mem;
+  logic clk1;
+  logic clk2;
+  logic signed [31:0] Reg1;
+endinterface
