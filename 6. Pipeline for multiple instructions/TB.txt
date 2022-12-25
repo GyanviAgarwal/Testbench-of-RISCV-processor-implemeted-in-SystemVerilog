@@ -1,0 +1,603 @@
+/////////////////TRANSACTION CLASS///////////////
+class transaction;
+randc bit clk1,clk2;
+randc logic signed [31:0] Mem; //for randomly generating the instuctions
+bit [31:0] Reg1;
+endclass
+ 
+////////////////GENERATOR CLASS//////////////////
+class generator;
+transaction t;
+mailbox mbx;
+event done;
+integer i;
+int generator1[$]; //queue for source register1 in generator
+int generator2[$]; //queue for source register2 in generator 
+
+function new(mailbox mbx);
+this.mbx = mbx;
+endfunction
+ 
+task run();
+  $display("[GENERATOR] STARTING");
+t = new();
+for(i =0; i< 4; i++) begin
+t.Mem= tb.data[i];
+mbx.put(t);
+    generator1.push_back(tb.dut.Reg[t.Mem[19:15]]);
+    generator2.push_back(tb.dut.Reg[t.Mem[24:20]]);
+    $display("Value of R1 in generator %d",tb.dut.Reg[t.Mem[19:15]]);
+    $display("Value of R2 in generator %d",tb.dut.Reg[t.Mem[24:20]]);
+    $display("Destination register value in generator %d",tb.dut.Reg[t.Mem[11:7]]);
+    $display("[GEN]: Data send to driver");
+    
+@(done);
+//#10;
+end
+$display("source register1 in generator[%p]",generator1);
+$display("source register2 in generator[%p]",generator2);
+endtask
+endclass
+
+
+///////////////DRIVER CLASS///////////////////////
+class driver;
+mailbox mbx;
+transaction t;
+event done;
+int driver1[$]; //queue for source register1 in driver
+int driver2[$]; //queue for source register2 in driver
+ 
+virtual RISCV_intf vif;
+ 
+function new(mailbox mbx);
+this.mbx = mbx;
+endfunction
+ 
+ 
+task run();
+  $display("[DRIVER] STARTING");
+t= new();
+  for(int i=0; i<4; i++) 
+  begin
+    
+$display("T=%0t [Driver] Waiting for instruction......", $time);
+
+mbx.get(t);
+$display("Ins driver Data: %b",t.Mem);
+  $display("Value of R1 in driver %d",tb.dut.Reg[t.Mem[19:15]]);
+  $display("Value of R2 in driver %d",tb.dut.Reg[t.Mem[24:20]]);
+  $display("Destination register value in driver %d",tb.dut.Reg[t.Mem[11:7]]);
+  
+vif.Mem <= t.Mem;
+  $display("[DRV] : Trigger Interface", $time);
+->done; 
+  @(posedge vif.clk2);
+end
+  $display("source register1 in driver[%p]",driver1);
+  $display("source register2 in driver[%p]",driver2);
+
+endtask
+endclass
+ 
+/////////////////MONITOR CLASS//////////////////////
+class monitor;
+virtual RISCV_intf vif;
+mailbox mbx;
+transaction t;
+reg [31:0] r [0:31];
+  
+  int monitor1[$];
+  int monitor2[$];
+
+/////ADDING COVERAGE////
+  
+  covergroup c;
+    option.per_instance=1;
+    
+    coverpoint t.Mem;
+
+  endgroup
+  
+/////END COVERAGE///////
+ 
+function new(mailbox mbx);
+this.mbx = mbx;
+c=new();
+endfunction
+ 
+task run();
+  $display("[MONITOR] STARTING");
+
+t = new();
+  for(int i=0; i<7; i++) 
+  begin
+  @(posedge vif.clk1)
+t.Mem = vif.Mem;
+t.Reg1= vif.Reg1;
+
+      monitor1.push_back(tb.dut.Reg[vif.Mem[19:15]]);
+      monitor2.push_back(tb.dut.Reg[vif.Mem[24:20]]);
+
+  
+  
+  $display("Instruction Data: %b",t.Mem);
+  $display("ouput Data: %b",t.Reg1);
+  $display("Value of R1 in monitor %d",tb.dut.Reg[t.Mem[19:15]]);
+  $display("Value of R2 in monitor %d",tb.dut.Reg[t.Mem[24:20]]);
+  $display("Destination register value in monitor %d",tb.dut.Reg[t.Mem[11:7]]);
+
+
+c.sample();
+mbx.put(t);
+$display("[MON] : Data send to Scoreboard");
+//#10;
+end
+  $display("source register1 in monitor[%p]",monitor1);
+  $display("source register2 in monitor[%p]",monitor2);
+endtask
+endclass   
+
+//////////////////SCOREBOARD CLASS///////////////////////
+class scoreboard;
+mailbox mbx;
+transaction t;
+  bit [31:0] temp;
+  bit [31:0] a;
+  bit [31:0] b;
+  bit [31:0] c;
+  bit [31:0] d;
+  bit [11:0] e; //ADDI
+  bit f; //ADDI
+  bit [31:0] g; //ADDI
+  bit [31:0] h; //LOAD
+  bit [6:0] i;
+  bit [4:0] j;
+  bit k;
+  
+  int scoreboard1[$];
+  int scoreboard2[$];
+
+function new(mailbox mbx);
+this.mbx = mbx;
+endfunction
+  
+function integer and1(input [31:0] a,b, output [31:0] temp);//AND Function
+    temp[31:0]=a[31:0] & b[31:0];
+    $display("temp: %b", temp);
+    return temp;    
+endfunction
+  
+function integer add1(input [31:0] a,b, output [31:0] temp); // ADD Function
+    
+    temp[31:0]=a[31:0] + b[31:0];
+    $display("temp: %b", temp);
+    return temp;    
+endfunction
+  
+function integer sub1(input [31:0] a,b, output [31:0] temp); //Subtract Function
+    
+    temp[31:0]=a[31:0] - b[31:0];
+    $display("temp: %b", temp);
+    return temp;
+endfunction
+  
+function integer or1(input [31:0] a,b, output [31:0] temp); //OR Function
+    
+  temp[31:0]=a[31:0] | b[31:0];
+    $display("temp: %b", temp);
+    return temp;
+endfunction
+
+function integer sll1(input [31:0] a,b, output [31:0] temp); //SLL Function
+    
+    temp[31:0]=a[31:0] << b[31:0];
+    $display("temp: %b", temp);
+    return temp;
+endfunction
+
+
+function integer sra1(input [31:0] a,b, output [31:0] temp); //SRA Function
+    
+    temp[31:0]=a[31:0] >> b[31:0];
+    $display("temp: %b", temp);
+    return temp;
+endfunction
+
+  function integer addi1(input [31:0] a,input [11:0] e,input f, output [31:0] temp); //ADDI Function
+    g= {f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,e};
+    temp[31:0]=a[31:0]+ g[31:0];
+    $display("temp: %b", temp);
+    return temp;
+endfunction
+  
+  function integer load(input [31:0] a,input [11:0] e,input f, output [31:0] temp); //LOAD Function
+    g= {f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,e};
+    temp[31:0]=a[31:0]+ g[31:0];
+    $display("temp: %b", temp);
+    return temp;
+endfunction
+
+ 
+task run();
+$display("[SCOREBOARD] STARTING");
+t = new();
+for(int i=0;i<7;i++)
+begin
+ 
+mbx.get(t);
+  
+  if(t.Mem[31:27]==5'b00000 && t.Mem[14:12]==3'b111 && t.Mem[6:2]==5'b01100)//AND Operation
+    begin
+      $display("AND Operation");
+        a=tb.dut.Reg[t.Mem[19:15]];
+        b=tb.dut.Reg[t.Mem[24:20]];
+        c=t.Reg1;
+         scoreboard1.push_back(c);
+
+      d[31:0]= and1(a[31:0],b[31:0],temp[31:0]);
+       scoreboard2.push_back(d);
+
+
+      $display("Value of R1 in scoreboard %d", a);
+      $display("Value of R2 in scoreboard %d", b);
+      $display("Output from DUT %d", c);
+      $display("Output from scoreboard %d", d);
+  if(d==c)
+    begin
+      $display("[SCO]: Test Passed for AND Operation");
+    end
+  else
+    begin
+      $display("[SCO]: Test Failed for AND Operation");
+    end
+    end
+  
+  else if(t.Mem[31:27]==5'b00000 && t.Mem[14:12]==3'b000 && t.Mem[6:2]==5'b01100) //ADD Operation
+    begin
+      $display("ADD Operation");
+        a=tb.dut.Reg[t.Mem[19:15]];
+        b=tb.dut.Reg[t.Mem[24:20]];
+        c=t.Reg1;
+        scoreboard1.push_back(c);
+     
+      d[31:0]= add1(a[31:0],b[31:0],temp[31:0]);
+      scoreboard2.push_back(d);
+      $display("Value of R1 in scoreboard %d", a);
+      $display("Value of R2 in scoreboard %d", b);
+      $display("Output from DUT %d", c);
+      $display("Output from scoreboard %d", d);
+   if(d==c)
+        begin
+          $display("[SCO]: Test passed for ADD Operation");
+        end
+      else
+        begin
+          $display("[SCO]: Test failed for ADD operation");
+        end
+    end
+  
+  else if(t.Mem[31:27]==5'b01000 && t.Mem[14:12]==3'b000 && t.Mem[6:2]==5'b01100) //SUB Operation
+    begin
+      $display("SUB Operation");
+        a=tb.dut.Reg[t.Mem[19:15]];
+        b=tb.dut.Reg[t.Mem[24:20]];
+        c=t.Reg1;
+        scoreboard1.push_back(c);
+
+      d[31:0]= sub1(a[31:0],b[31:0],temp[31:0]);
+      scoreboard2.push_back(d);
+      $display("Value of R1 in scoreboard %d", a);
+      $display("Value of R2 in scoreboard %d", b);
+      $display("Output from DUT %d", c);
+      $display("Output from scoreboard %d", d);
+      if(d==c)
+        begin
+          $display("[SCO]: Test passed for SUB Operation");
+        end
+      else
+        begin
+          $display("[SCO]: Test failed for SUB operation");
+        end
+    end
+
+  else if(t.Mem[31:27]==5'b00000 && t.Mem[14:12]==3'b110 && t.Mem[6:2]==5'b01100) //OR Operation
+    begin
+      $display("OR Operation");
+        a=tb.dut.Reg[t.Mem[19:15]];
+        b=tb.dut.Reg[t.Mem[24:20]];
+        c=t.Reg1;
+        scoreboard1.push_back(c);
+      d[31:0]= or1(a[31:0],b[31:0],temp[31:0]);
+      scoreboard2.push_back(d);
+
+      $display("Value of R1 in scoreboard %d", a);
+      $display("Value of R2 in scoreboard %d", b);
+      $display("Output from DUT %d", c);
+      $display("Output from scoreboard %d", d);
+      if(d==c)
+        begin
+          $display("[SCO]: Test passed for OR Operation");
+        end
+      else
+        begin
+          $display("[SCO]: Test failed for OR operation");
+        end
+    end
+  
+  else if(t.Mem[31:27]==5'b00000 && t.Mem[14:12]==3'b001 && t.Mem[6:2]==5'b01100) //SLL Operation
+    begin
+      $display("SLL Operation");
+        a=tb.dut.Reg[t.Mem[19:15]];
+        b=tb.dut.Reg[t.Mem[24:20]];
+        c=t.Reg1;
+        scoreboard1.push_back(c);
+
+      d[31:0]= sll1(a[31:0],b[31:0],temp[31:0]);
+      scoreboard2.push_back(d);
+      $display("Value of R1 in scoreboard %d", a);
+      $display("Value of R2 in scoreboard %d", b);
+      $display("Output from DUT %d", c);
+      $display("Output from scoreboard %d", d);
+      if(d==c)
+        begin
+          $display("[SCO]: Test passed for SLL Operation");
+        end
+      else
+        begin
+          $display("[SCO]: Test failed for SLL operation");
+        end
+    end
+
+  else if(t.Mem[31:27]==5'b01000 && t.Mem[14:12]==3'b101 && t.Mem[6:2]==5'b01100) //SRA Operation
+    begin
+      $display("SRA Operation");
+        a=tb.dut.Reg[t.Mem[19:15]];
+        b=tb.dut.Reg[t.Mem[24:20]];
+        c=t.Reg1;
+        scoreboard1.push_back(c);
+
+      d[31:0]= sra1(a[31:0],b[31:0],temp[31:0]);
+      scoreboard2.push_back(d);
+
+      $display("Value of R1 in scoreboard %d", a);
+      $display("Value of R2 in scoreboard %d", b);
+      $display("Output from DUT %d", c);
+      $display("Output from scoreboard %d", d);
+      if(d==c)
+         begin
+          $display("[SCO]: Test passed for SRA Operation");
+        end
+      else
+        begin
+          $display("[SCO]: Test failed for SRA operation");
+        end
+    end
+
+  else if(t.Mem[31:27]==5'b00000 && t.Mem[14:12]==3'b000 && t.Mem[6:2]==5'b00100)//ADDI Operation
+    begin
+      $display("ADDI Operation");
+        a=tb.dut.Reg[t.Mem[19:15]];
+        e=t.Mem[31:20];
+        f=t.Mem[31];
+        c=t.Reg1;
+        scoreboard1.push_back(c);
+
+      d[31:0]=addi1(a[31:0],e[11:0],f,temp[31:0]);
+      scoreboard2.push_back(d);
+
+      $display("Output from DUT %d, time", c);
+      $display("Output from scoreboard %d", d);
+      if(d==c)
+         begin
+           $display("[SCO]: Test passed for ADDI Operation");
+        end
+      else
+        begin
+          $display("[SCO]: Test failed for ADDI operation");
+        end
+    end
+  
+  else if(t.Mem[14:12]==3'b010 && t.Mem[6:2]==5'b00000)//LOAD Operation
+    begin
+      $display("Load Operation");
+        a=tb.dut.Reg[t.Mem[19:15]];
+        e=t.Mem[31:20];
+        f=t.Mem[31];
+        c=t.Reg1;
+        scoreboard1.push_back(c);
+      d[31:0]=load(a[31:0],e[11:0],f,temp[31:0]);
+      h[31:0]=tb.dut.Mem_data[d];
+      scoreboard2.push_back(h);
+      $display("Output from DUT %d", c);
+      $display("Output from scoreboard %d", h);
+      if(c==h)
+         begin
+           $display("[SCO]: Test passed for LOAD Operation");
+        end
+      else
+        begin
+          $display("[SCO]: Test failed for LOAD operation");
+        end
+    end
+  
+  else if(t.Mem[14:12]==3'b010 && t.Mem[6:2]==5'b01000)//Store Operation
+    begin
+      $display("Store Operation");
+        a=tb.dut.Reg[t.Mem[19:15]];
+        i=t.Mem[31:25];
+        j=t.Mem[11:7];
+        k=t.Mem[31];
+        c=t.Reg1;
+        scoreboard1.push_back(c);
+      h[31:0]=tb.dut.Mem_data[t.Mem[24:20]];
+      scoreboard2.push_back(h);
+
+      $display("Output from DUT %d", c);
+      $display("Output from scoreboard %d", h);
+      if(c==h)
+         begin
+           $display("[SCO]: Test passed for Store Operation");
+        end
+      else
+        begin
+          $display("[SCO]: Test failed for Store operation");
+        end
+    end
+
+  else
+    begin
+      $display("Invalid statement");
+    end
+end
+  
+  $display("Output from DUT [%p]",scoreboard1);
+  $display("Golden output in scoreboard[%p]",scoreboard2);
+
+  for(int j=0;j<5;j++)
+    begin
+      if(scoreboard1[j+3]==scoreboard2[j])
+        begin
+          $display("Output from DUT [%p]",scoreboard1[j+3]);
+          $display("Golden Output [%p]",scoreboard2[j]);
+          $display("[SCO]: Test Passed");
+        end
+      
+      else
+        begin
+          $display("[SCO]: Test Failed");
+        end
+    end
+
+endtask
+endclass  
+ 
+/////////////////ENVIRONMENT CLASS////////////////////////
+class environment;
+generator gen;
+driver drv;
+monitor mon;
+scoreboard sco;
+ 
+virtual RISCV_intf vif;
+ 
+mailbox gdmbx;
+mailbox msmbx;
+ 
+event gddone;
+ 
+function new(mailbox gdmbx, mailbox msmbx);
+this.gdmbx = gdmbx;
+this.msmbx = msmbx;
+ 
+gen = new(gdmbx);
+drv = new(gdmbx);
+ 
+mon = new(msmbx);
+sco = new(msmbx);
+endfunction
+ 
+task run();
+gen.done = gddone;
+drv.done = gddone;
+ 
+drv.vif = vif;
+mon.vif = vif;
+ 
+fork
+gen.run();
+drv.run();
+mon.run();
+sco.run();
+join_any
+ 
+endtask 
+endclass
+
+//////////////////////TESTBENCH MODULE///////////////////////
+module tb();
+ 
+environment env;
+ 
+mailbox gdmbx;
+mailbox msmbx;
+ 
+RISCV_intf vif();
+  
+//reg clk1, clk2;
+  reg[31:0] data [0:3];
+ 
+
+  RISCV dut (.clk1(vif.clk1), .clk2(vif.clk2),.Mem(vif.Mem),.Reg1(vif.Reg1));
+  
+ 
+
+initial 
+        begin
+            vif.clk1 = 0; vif.clk2 = 0;
+          repeat (50)
+                begin
+                #5  vif.clk1 = 1; #5 vif.clk1 = 0;
+                #5  vif.clk2 = 1; #5 vif.clk2 = 0;
+                end
+ end
+
+  
+///////////////////Register Data///////////////////////////////
+initial
+        begin
+          for(integer i= 0; i<32;i=i+1)
+            begin
+              dut.Reg[i]=i;
+              $display("%d,%b",i,dut.Reg[i]);
+            end
+        end
+
+////////////////Data Memory///////////////////////////////////
+initial
+  begin
+    for(integer i=0;i<1024;i=i+1)
+      begin
+        dut.Mem_data[i]=i;
+      end
+  end
+  
+  initial
+    begin
+      $readmemb("instruction.txt", data);
+      for(integer i=0; i<1; i=i+1)      // using instruction.txt file
+        begin
+          $display("%d,%b",i,data[i]);
+        end
+    end
+  
+  initial
+        begin
+
+        dut.HALTED=0;
+        dut.PC=0;
+        dut.TAKEN_BRANCH=0;
+        dut.EX_MEM_cond=0;
+		dut.write_back=0;  
+        end
+initial
+begin
+gdmbx = new();
+msmbx = new();
+env = new(gdmbx, msmbx);
+env.vif = vif;
+env.run();
+#100;
+$finish;
+end
+  
+  initial
+    begin
+      $dumpfile("testbench.vcd");
+      $dumpvars;
+    end
+ 
+endmodule
+
+
+
