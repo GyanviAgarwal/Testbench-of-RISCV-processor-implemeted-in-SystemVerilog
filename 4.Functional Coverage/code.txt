@@ -1,0 +1,10 @@
+module andt (
+  input [4:0] a,b,c,
+  output [4:0] y
+);
+ 
+assign y = a & b &c;
+ 
+endmodule
+
+

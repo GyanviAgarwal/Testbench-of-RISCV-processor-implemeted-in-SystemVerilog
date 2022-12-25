@@ -1,0 +1,295 @@
+class transaction;
+  randc bit [4:0] rs1;
+  randc bit [4:0] rs2;
+  randc bit [4:0] rd;
+  bit [4:0] y;
+  
+  constraint data_rs1{rs1<32;}
+  constraint data_rs2{rs2<32;}
+  constraint data_rd{rd<32;}
+endclass
+ 
+class generator;
+transaction t;
+mailbox mbx;
+event done;
+integer i;
+integer j;
+reg [31:0] temp;
+//reg [31:0] temp1;
+  reg [31:0] instruction [9:0];
+
+function new(mailbox mbx);
+this.mbx = mbx;
+endfunction
+ 
+task run();
+t = new();
+j=0;
+  for(i =0; i< 100; i++) begin
+    t.randomize();
+    $display("Register rs1 %b", t.rs1);  
+    $display("Register rs2 %b", t.rs2);  
+    $display("Register rd %b", t.rd);  
+  // RR instruction formation
+  
+  temp[6:2]=5'b01100;
+  temp[1:0]=2'b00;
+  temp[26:25]=2'b00;
+  
+  //AND INSTRUCTION
+  temp[14:12]=3'b111;
+  temp[31:27]=5'b00000;
+  temp[19:15]=t.rs1;
+  temp[24:20]=t.rs2;
+  temp[11:7]= t.rd;
+  //instruction [j][31:0]=temp[31:0];
+  instruction [j]=temp;
+
+  $display("Instruction :%b", temp);
+
+  j++;
+  //ADD INSTRUCTION
+  temp[14:12]=3'b000;
+  temp[31:27]=5'b00000;
+  temp[19:15]=t.rs1;
+  temp[24:20]=t.rs2;
+  temp[11:7]= t.rd;
+  
+  instruction [j]=temp;
+  //instruction [j][31:0]=temp[31:0];
+
+  $display("Instruction :%b", temp);
+
+  j++;
+  //SUB INSTRUCTION
+  temp[14:12]=3'b000;
+  temp[31:27]=5'b01000;
+  temp[19:15]=t.rs1;
+  temp[24:20]=t.rs2;
+  temp[11:7]= t.rd;
+  
+  instruction [j]=temp;
+  //instruction [j][31:0]=temp[31:0];
+
+  $display("Instruction :%b", temp);
+
+  j++;
+  //OR INSTRUCTION
+  temp[14:12]=3'b110;
+  temp[31:27]=5'b00000;
+  temp[19:15]=t.rs1;
+  temp[24:20]=t.rs2;
+  temp[11:7]= t.rd;
+  
+  instruction [j]=temp;
+  //instruction [j][31:0]=temp[31:0];
+
+  $display("Instruction :%b", temp);
+
+  j++;
+  //SLL INSTRUCTION
+  temp[14:12]=3'b001;
+  temp[31:27]=5'b00000;
+  temp[19:15]=t.rs1;
+  temp[24:20]=t.rs2;
+  temp[11:7]= t.rd;
+  
+  instruction [j]=temp;
+  //instruction [j][31:0]=temp[31:0];
+
+  $display("Instruction :%b", temp);
+
+  j++;
+  //SRA INSTRUCTION
+  temp[14:12]=3'b101;
+  temp[31:27]=5'b01000;
+  temp[19:15]=t.rs1;
+  temp[24:20]=t.rs2;
+  temp[11:7]= t.rd;
+  
+  instruction [j]=temp;
+  //instruction [j][31:0]=temp[31:0];
+
+  $display("Instruction :%b", temp);
+
+
+
+mbx.put(t);
+$display("[GEN]: Data send to driver");
+@(done);
+#10;
+end
+  $display("Instruction data: %0b", instruction[i]);
+endtask
+endclass
+ 
+interface andt_intf();
+  logic [4:0] rs1;
+  logic [4:0] rs2;
+  logic [4:0] rd;
+  logic [4:0] y;
+endinterface
+ 
+class driver;
+mailbox mbx;
+transaction t;
+event done;
+ 
+virtual andt_intf vif;
+ 
+function new(mailbox mbx);
+this.mbx = mbx;
+endfunction
+ 
+ 
+task run();
+t= new();
+forever begin
+mbx.get(t);
+vif.rs1 = t.rs1;
+vif.rs2 = t.rs2;
+vif.rd= t.rd;
+$display("[DRV] : Trigger Interface");
+->done; 
+#10;
+end
+endtask
+ 
+ 
+endclass
+ 
+class monitor;
+virtual andt_intf vif;
+mailbox mbx;
+transaction t;
+  
+/////ADDING COVERAGE////
+  
+  covergroup c;
+     option.per_instance=1;
+    
+     coverpoint t.rs1;
+     coverpoint t.rs2;
+     coverpoint t.rd;
+    
+    cross t.rs1, t.rs2;
+    cross t.rs2, t.rd;
+    cross t.rd, t.rs1;
+    cross t.rs1, t.rs2, t.rd;
+  endgroup
+  
+/////END COVERAGE///////
+ 
+function new(mailbox mbx);
+this.mbx = mbx;
+c=new();
+endfunction
+ 
+task run();
+t = new();
+forever begin
+t.rs1 = vif.rs1;
+t.rs2 = vif.rs2;
+t.rd=vif.rd;
+t.y = vif.y;
+c.sample();
+mbx.put(t);
+$display("[MON] : Data send to Scoreboard");
+#10;
+end
+endtask
+endclass   
+ 
+class scoreboard;
+mailbox mbx;
+transaction t;
+bit [7:0] temp; 
+ 
+function new(mailbox mbx);
+this.mbx = mbx;
+endfunction
+ 
+task run();
+t = new();
+forever begin
+mbx.get(t);
+temp = t.rs1 & t.rs2 & t.rd;
+if(t.y == temp)
+begin
+$display("[SCO] : Test Passed");
+end
+else 
+begin
+$display("[SCO] : Test Failed");
+end
+#10;
+end
+endtask
+endclass  
+ 
+class environment;
+generator gen;
+driver drv;
+monitor mon;
+scoreboard sco;
+ 
+virtual andt_intf vif;
+ 
+mailbox gdmbx;
+mailbox msmbx;
+ 
+event gddone;
+ 
+function new(mailbox gdmbx, mailbox msmbx);
+this.gdmbx = gdmbx;
+this.msmbx = msmbx;
+ 
+gen = new(gdmbx);
+drv = new(gdmbx);
+ 
+mon = new(msmbx);
+sco = new(msmbx);
+endfunction
+ 
+task run();
+gen.done = gddone;
+drv.done = gddone;
+ 
+drv.vif = vif;
+mon.vif = vif;
+ 
+fork 
+gen.run();
+drv.run();
+mon.run();
+sco.run();
+join_any
+ 
+endtask
+ 
+endclass
+ 
+module tb();
+ 
+environment env;
+ 
+mailbox gdmbx;
+mailbox msmbx;
+ 
+andt_intf vif();
+ 
+  andt dut (vif.rs1, vif.rs2,vif.rd,vif.y);
+ 
+initial begin
+gdmbx = new();
+msmbx = new();
+env = new(gdmbx, msmbx);
+env.vif = vif;
+env.run();
+#200;
+$finish;
+end
+ 
+endmodule
+
