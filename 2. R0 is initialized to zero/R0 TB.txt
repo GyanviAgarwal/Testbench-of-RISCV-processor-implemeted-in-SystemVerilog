@@ -1,0 +1,276 @@
+/////////////////TRANSACTION CLASS///////////////
+class transaction;
+randc bit clk1,clk2;
+randc logic signed [31:0] Mem; //for randomly generating the instuctions
+bit [31:0] Reg1;
+endclass
+
+
+////////////////GENERATOR CLASS//////////////////
+class generator;
+transaction t;
+mailbox mbx;
+event done;
+integer i; 
+function new(mailbox mbx);
+this.mbx = mbx;
+endfunction
+ 
+task run();
+  $display("T=%t [GENERATOR] START TIME", $time);
+t = new();
+  for(i =0; i< 1; i++) begin
+t.Mem= tb.data[i];
+mbx.put(t);
+$display("Value of R1 in generator %d, time",tb.dut.Reg[t.Mem[19:15]], $time);
+$display("[GEN]: Data send to driver" ,$time);
+    
+@(done);
+end
+endtask
+endclass
+
+
+
+///////////////DRIVER CLASS///////////////////////
+class driver;
+mailbox mbx;
+transaction t;
+event done;
+ 
+virtual RISCV_intf vif;
+ 
+function new(mailbox mbx);
+this.mbx = mbx;
+endfunction
+ 
+ 
+task run();
+$display("T=%0t [DRIVER] START TIME......", $time);
+t= new();
+  forever
+    begin
+$display("T=%0t [Driver] Waiting for instruction......", $time);
+
+mbx.get(t);
+      
+$display("Ins driver Data: %b",t.Mem);
+  $display("Value of R1 in driver %d, time",tb.dut.Reg[t.Mem[19:15]], $time);
+vif.Mem <= t.Mem;
+  $display("[DRV] : Trigger Interface", $time);
+->done; 
+      @(posedge vif.clk2);
+end
+
+
+endtask
+endclass 
+
+
+/////////////////MONITOR CLASS//////////////////////
+class monitor;
+virtual RISCV_intf vif;
+mailbox mbx;
+transaction t;
+reg [31:0] r [0:31];
+  
+ 
+function new(mailbox mbx);
+this.mbx = mbx;
+//c=new();
+endfunction
+ 
+task run();
+  $display("T=%0t [MONITOR] START TIME......", $time);
+
+  t = new();
+  forever
+    begin
+      @(posedge vif.clk1)
+t.Mem = vif.Mem;
+t.Reg1= vif.Reg1;
+  $display("Instruction Data: %b, time",t.Mem, $time);
+  $display("ouput Data: %b, time",t.Reg1, $time);
+  $display("Value of R1 in monitor %d, time",tb.dut.Reg[t.Mem[19:15]], $time);
+
+
+//c.sample();
+mbx.put(t);
+$display("[MON] : Data send to Scoreboard");
+end
+endtask
+endclass   
+
+//////////////////SCOREBOARD CLASS///////////////////////
+class scoreboard;
+mailbox mbx;
+transaction t;
+  bit [31:0] d; //this will store output from dut
+  bit [31:0] g;
+  
+
+function new(mailbox mbx);
+this.mbx = mbx;
+endfunction
+
+ 
+task run();
+  $display("T=%0t [SCOREBOARD] START TIME", $time);
+t = new();
+  forever
+begin
+ 
+mbx.get(t);
+  $display("T=%0t At Scoreboard ......", $time);
+  d= t.Reg1; //output from dut
+  $display("Output from DUT %d",d,$time);
+  g= tb.dut.Reg[0];
+  $display("Golden output in scoreboard %d", g, $time);
+ 
+    
+  if((d==g)&& t.Mem[11:7]!=tb.dut.Reg[0])
+    begin
+      $display("[SCO]: R0 is zero and not a destination register");
+    end
+  else
+    begin
+    $display("[SCO]: Test Failed");
+    end
+    
+  
+
+end
+
+endtask
+endclass  
+ 
+
+
+/////////////////ENVIRONMENT CLASS////////////////////////
+class environment;
+generator gen;
+driver drv;
+monitor mon;
+scoreboard sco;
+ 
+virtual RISCV_intf vif;
+ 
+mailbox gdmbx;
+mailbox msmbx;
+ 
+event gddone;
+ 
+function new(mailbox gdmbx, mailbox msmbx);
+this.gdmbx = gdmbx;
+this.msmbx = msmbx;
+ 
+gen = new(gdmbx);
+drv = new(gdmbx);
+ 
+mon = new(msmbx);
+sco = new(msmbx);
+endfunction
+ 
+task run();
+gen.done = gddone;
+drv.done = gddone;
+ 
+drv.vif = vif;
+mon.vif = vif;
+ 
+fork
+gen.run();
+drv.run();
+mon.run();
+sco.run();
+join_any
+ 
+endtask 
+endclass
+
+
+
+//////////////////////TESTBENCH MODULE///////////////////////
+module tb();
+ 
+environment env;
+ 
+mailbox gdmbx;
+mailbox msmbx;
+ 
+RISCV_intf vif();
+  
+//reg clk1, clk2;
+  reg[31:0] data [1:0];
+ 
+
+  RISCV dut (.clk1(vif.clk1), .clk2(vif.clk2),.Mem(vif.Mem),.Reg1(vif.Reg1));
+  
+ 
+
+initial 
+        begin
+            vif.clk1 = 0; vif.clk2 = 0;
+          repeat (50)
+                begin
+                #5  vif.clk1 = 1; #5 vif.clk1 = 0;
+                #5  vif.clk2 = 1; #5 vif.clk2 = 0;
+                end
+        end
+
+///////////////////Register Data///////////////////////////////
+initial
+        begin
+          for(integer i= 0; i<32;i=i+1)
+            begin
+              dut.Reg[i]=i;
+              //$display("%d,%b",i,dut.Reg[i]);
+            end
+        end
+////////////////////DATA MEMORY///////////////////
+initial
+        begin
+          for(integer i= 0; i<1024;i=i+1)
+            begin
+              dut.Mem_data[i]=i;
+              //$display("%d,%b",i,dut.Mem_data[i]);
+            end
+        end
+ 
+  
+  initial
+    begin
+      $readmemb("instruction.txt", data);
+      for(integer i=0; i<1; i=i+1)      // using instruction.txt file
+        begin
+          $display("%d,%b",i,data[i]);
+        end
+    end
+  
+  initial
+        begin
+        dut.HALTED=0;
+        dut.PC=0;
+        dut.TAKEN_BRANCH=0;
+        dut.EX_MEM_cond=0;
+		dut.write_back=0;  
+        end
+initial
+begin
+gdmbx = new();
+msmbx = new();
+env = new(gdmbx, msmbx);
+env.vif = vif;
+env.run();
+#100;
+$finish;
+end
+  
+  initial
+    begin
+      $dumpfile("testbench.vcd");
+      $dumpvars;
+    end
+ 
+endmodule
+
